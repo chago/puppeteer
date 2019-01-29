@@ -218,10 +218,23 @@ module.exports.addTests = function({testRunner, expect, product}) {
       const screenshotError = await elementHandle.screenshot().catch(error => error);
       expect(screenshotError.message).toBe('Node is either not visible or not an HTMLElement');
     });
-    xit('should not hang with zero width/height element', async({page, server}) => {
-      await page.setContent('<div style="width: 0; height: 0"></div>');
+    it('should not hang with zero width/height element', async({page, server}) => {
+      await page.setContent('<div style="width: 50px; height: 0"></div>');
       const div = await page.$('div');
-      await div.screenshot();
+      const error = await div.screenshot().catch(e => e);
+      expect(error.message).toBe('Node has 0 height.');
+    });
+    it('should work for an element with fractional dimensions', async({page}) => {
+      await page.setContent('<div style="width:48.51px;height:19.8px;border:1px solid black;"></div>');
+      const elementHandle = await page.$('div');
+      const screenshot = await elementHandle.screenshot();
+      expect(screenshot).toBeGolden('screenshot-element-fractional.png');
+    });
+    it('should work for an element with an offset', async({page}) => {
+      await page.setContent('<div style="position:absolute; top: 10.3px; left: 20.4px;width:50.3px;height:20.2px;border:1px solid black;"></div>');
+      const elementHandle = await page.$('div');
+      const screenshot = await elementHandle.screenshot();
+      expect(screenshot).toBeGolden('screenshot-element-fractional-offset.png');
     });
   });
 

@@ -25,16 +25,58 @@ SOURCE=$PWD bash scripts/fetch_firefox.sh
 ```bash
 cd firefox
 git am ../patches/*
-ln -s $PWD/../src $PWD/testing/juggler
 ```
 
-4. Bootstrap host environment for Firefox build and compile firefox locally
+4. Add Juggler to Firefox. NOTE: On Linux, symlinks work. On OSX, files have to be copied.
+
+```bash
+# LINUX:
+ln -s $PWD/../src $PWD/testing/juggler
+# OSX:
+cp -r $PWD/../src $PWD/testing/juggler
+```
+
+5. Bootstrap host environment for Firefox build and compile firefox locally
 
 ```bash
 # OPTIONAL - bootstrap host environment.
 ./mach bootstrap --application-choice=browser --no-interactive
 # Compile browser
 ./mach build
+```
+
+### Troubleshooting when building FF on Mac
+#### Black screen after FF Build
+As of Jan. 2019 there is a known [bug](https://bugzilla.mozilla.org/show_bug.cgi?id=1493330) that will cause an entirely black screen when running the nightly build of firefox built with the **MacOSX SDK version 10.14.**
+
+The easiest fix right now is downgrading your MacOSX SDK.
+
+To do so:
+
+1) Go to [this repo](https://github.com/phracker/MacOSX-SDKs) and install any **SDK version < 10.14** (e.g. 10.13 works fine)
+
+2) In the `juggler/firefox` folder:
+
+```bash
+echo "ac_add_options --with-macos-sdk=path/to/sdk" >> .mozconfig
+# your SDK might be located at
+# /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/
+```
+
+3) run `./mach build` again
+
+
+#### Missing headers in /usr/include
+
+On MacOS 10.14 (Mojave) you might run into issues when building FF.
+
+The error is related to [a change in the xcode-select installation](https://bugzilla.mozilla.org/show_bug.cgi?id=1487552)
+
+To workaround this issue you can simply run:
+
+```bash
+# Write missing headers to /usr/include
+sudo installer -pkg /Library/Developer/CommandLineTools/Packages/macOS_SDK_headers_for_macOS_10.14.pkg -target /
 ```
 
 ## Running Firefox with Juggler

@@ -17,6 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const utils = require('./utils');
 const {waitEvent} = utils;
+const {TimeoutError} = utils.requireRoot('Errors');
 
 const DeviceDescriptors = utils.requireRoot('DeviceDescriptors');
 const iPhone = DeviceDescriptors['iPhone 6'];
@@ -90,6 +91,55 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       page.goto('chrome://crash').catch(e => {});
       await waitEvent(page, 'error');
       expect(error.message).toBe('Page crashed!');
+    });
+  });
+
+  describe('Page.Events.Popup', function() {
+    it('should work', async({page}) => {
+      const [popup] = await Promise.all([
+        new Promise(x => page.once('popup', x)),
+        page.evaluate(() => window.open('about:blank')),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(true);
+    });
+    it('should work with noopener', async({page}) => {
+      const [popup] = await Promise.all([
+        new Promise(x => page.once('popup', x)),
+        page.evaluate(() => window.open('about:blank', null, 'noopener')),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(false);
+    });
+    it('should work with clicking target=_blank', async({page, server}) => {
+      await page.goto(server.EMPTY_PAGE);
+      await page.setContent('<a target=_blank href="/one-style.html">yo</a>');
+      const [popup] = await Promise.all([
+        new Promise(x => page.once('popup', x)),
+        page.click('a'),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(true);
+    });
+    it('should work with fake-clicking target=_blank and rel=noopener', async({page, server}) => {
+      await page.goto(server.EMPTY_PAGE);
+      await page.setContent('<a target=_blank rel=noopener href="/one-style.html">yo</a>');
+      const [popup] = await Promise.all([
+        new Promise(x => page.once('popup', x)),
+        page.$eval('a', a => a.click()),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(false);
+    });
+    it('should work with clicking target=_blank and rel=noopener', async({page, server}) => {
+      await page.goto(server.EMPTY_PAGE);
+      await page.setContent('<a target=_blank rel=noopener href="/one-style.html">yo</a>');
+      const [popup] = await Promise.all([
+        new Promise(x => page.once('popup', x)),
+        page.click('a'),
+      ]);
+      expect(await page.evaluate(() => !!window.opener)).toBe(false);
+      expect(await popup.evaluate(() => !!window.opener)).toBe(false);
     });
   });
 
@@ -273,6 +323,33 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       expect(message.text()).toContain('No \'Access-Control-Allow-Origin\'');
       expect(message.type()).toEqual('error');
     });
+    it('should have location when fetch fails', async({page, server}) => {
+      await page.goto(server.EMPTY_PAGE);
+      const [message] = await Promise.all([
+        waitEvent(page, 'console'),
+        page.setContent(`<script>fetch('http://wat');</script>`),
+      ]);
+      expect(message.text()).toContain(`ERR_NAME_NOT_RESOLVED`);
+      expect(message.type()).toEqual('error');
+      expect(message.location()).toEqual({
+        url: 'http://wat/',
+        lineNumber: undefined
+      });
+    });
+    it('should have location for console API calls', async({page, server}) => {
+      await page.goto(server.EMPTY_PAGE);
+      const [message] = await Promise.all([
+        waitEvent(page, 'console'),
+        page.goto(server.PREFIX + '/consolelog.html'),
+      ]);
+      expect(message.text()).toBe('yellow');
+      expect(message.type()).toBe('log');
+      expect(message.location()).toEqual({
+        url: server.PREFIX + '/consolelog.html',
+        lineNumber: 7,
+        columnNumber: 14,
+      });
+    });
   });
 
   describe('Page.Events.DOMContentLoaded', function() {
@@ -345,6 +422,17 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       ]);
       expect(request.url()).toBe(server.PREFIX + '/digits/2.png');
     });
+    it('should respect timeout', async({page, server}) => {
+      let error = null;
+      await page.waitForRequest(() => false, {timeout: 1}).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
+    it('should respect default timeout', async({page, server}) => {
+      let error = null;
+      page.setDefaultTimeout(1);
+      await page.waitForRequest(() => false).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
     it('should work with no timeout', async({page, server}) => {
       await page.goto(server.EMPTY_PAGE);
       const [request] = await Promise.all([
@@ -371,6 +459,17 @@ module.exports.addTests = function({testRunner, expect, headless}) {
         })
       ]);
       expect(response.url()).toBe(server.PREFIX + '/digits/2.png');
+    });
+    it('should respect timeout', async({page, server}) => {
+      let error = null;
+      await page.waitForResponse(() => false, {timeout: 1}).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
+    it('should respect default timeout', async({page, server}) => {
+      let error = null;
+      page.setDefaultTimeout(1);
+      await page.waitForResponse(() => false).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
     });
     it('should work with predicate', async({page, server}) => {
       await page.goto(server.EMPTY_PAGE);
@@ -541,6 +640,23 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       const result = await page.content();
       expect(result).toBe(`${doctype}${expectedOutput}`);
     });
+    it('should respect timeout', async({page, server}) => {
+      const imgPath = '/img.png';
+      // stall for image
+      server.setRoute(imgPath, (req, res) => {});
+      let error = null;
+      await page.setContent(`<img src="${server.PREFIX + imgPath}"></img>`, {timeout: 1}).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
+    it('should respect default navigation timeout', async({page, server}) => {
+      page.setDefaultNavigationTimeout(1);
+      const imgPath = '/img.png';
+      // stall for image
+      server.setRoute(imgPath, (req, res) => {});
+      let error = null;
+      await page.setContent(`<img src="${server.PREFIX + imgPath}"></img>`).catch(e => error = e);
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
     it('should await resources to load', async({page, server}) => {
       const imgPath = '/img.png';
       let imgResponse = null;
@@ -551,6 +667,10 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       expect(loaded).toBe(false);
       imgResponse.end();
       await contentPromise;
+    });
+    it('should work fast enough', async({page, server}) => {
+      for (let i = 0; i < 20; ++i)
+        await page.setContent('<div>yo</div>');
     });
   });
 
@@ -876,7 +996,7 @@ module.exports.addTests = function({testRunner, expect, headless}) {
       expect(error.message).toContain('Values must be strings');
     });
     // @see https://github.com/GoogleChrome/puppeteer/issues/3327
-    xit('should work when re-defining top-level Event class', async({page, server}) => {
+    it('should work when re-defining top-level Event class', async({page, server}) => {
       await page.goto(server.PREFIX + '/input/select.html');
       await page.evaluate(() => window.Event = null);
       await page.select('select', 'blue');
@@ -916,6 +1036,12 @@ module.exports.addTests = function({testRunner, expect, headless}) {
   describe('Page.browser', function() {
     it('should return the correct browser instance', async function({ page, browser }) {
       expect(page.browser()).toBe(browser);
+    });
+  });
+
+  describe('Page.browserContext', function() {
+    it('should return the correct browser instance', async function({page, context, browser}) {
+      expect(page.browserContext()).toBe(context);
     });
   });
 };

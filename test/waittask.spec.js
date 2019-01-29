@@ -17,6 +17,13 @@
 const utils = require('./utils');
 const {TimeoutError} = utils.requireRoot('Errors');
 
+let asyncawait = true;
+try {
+  new Function('async function foo() {await 1}');
+} catch (e) {
+  asyncawait = false;
+}
+
 module.exports.addTests = function({testRunner, expect, product}) {
   const {describe, xdescribe, fdescribe} = testRunner;
   const {it, fit, xit} = testRunner;
@@ -52,6 +59,12 @@ module.exports.addTests = function({testRunner, expect, product}) {
       const timeout = 42;
       await page.waitFor(timeout);
       expect(Date.now() - startTime).not.toBeLessThan(timeout / 2);
+    });
+    it('should work with multiline body', async({page, server}) => {
+      const result = await page.waitForFunction(`
+        (() => true)()
+      `);
+      expect(await result.jsonValue()).toBe(true);
     });
     it('should wait for predicate', async({page, server}) => {
       const watchdog = page.waitFor(() => window.innerWidth < 100);
@@ -157,6 +170,14 @@ module.exports.addTests = function({testRunner, expect, product}) {
       expect(error.message).toContain('waiting for function failed: timeout');
       expect(error).toBeInstanceOf(TimeoutError);
     });
+    it('should respect default timeout', async({page}) => {
+      page.setDefaultTimeout(1);
+      let error = null;
+      await page.waitForFunction('false').catch(e => error = e);
+      expect(error).toBeTruthy();
+      expect(error.message).toContain('waiting for function failed: timeout');
+      expect(error).toBeInstanceOf(TimeoutError);
+    });
     it('should disable timeout when its set to 0', async({page}) => {
       const watchdog = page.waitForFunction(() => {
         window.__counter = (window.__counter || 0) + 1;
@@ -165,6 +186,19 @@ module.exports.addTests = function({testRunner, expect, product}) {
       await page.waitForFunction(() => window.__counter > 10);
       await page.evaluate(() => window.__injected = true);
       await watchdog;
+    });
+    it('should survive cross-process navigation', async({page, server}) => {
+      let fooFound = false;
+      const waitForFunction = page.waitForFunction('window.__FOO === 1').then(() => fooFound = true);
+      await page.goto(server.EMPTY_PAGE);
+      expect(fooFound).toBe(false);
+      await page.reload();
+      expect(fooFound).toBe(false);
+      await page.goto(server.CROSS_PROCESS_PREFIX + '/grid.html');
+      expect(fooFound).toBe(false);
+      await page.evaluate(() => window.__FOO = 1);
+      await waitForFunction;
+      expect(fooFound).toBe(true);
     });
   });
 
@@ -177,6 +211,13 @@ module.exports.addTests = function({testRunner, expect, product}) {
       await frame.waitForSelector('*');
       await frame.evaluate(addElement, 'div');
       await frame.waitForSelector('div');
+    });
+
+    it('should work with removed MutationObserver', async({page, server}) => {
+      await page.evaluate(() => delete window.MutationObserver);
+      const waitForSelector = page.waitForSelector('.zombo');
+      await page.setContent(`<div class='zombo'>anything</div>`);
+      expect(await page.evaluate(x => x.textContent, await waitForSelector)).toBe('anything');
     });
 
     it('should resolve promise when node is added', async({page, server}) => {
@@ -221,15 +262,6 @@ module.exports.addTests = function({testRunner, expect, product}) {
       expect(eHandle.executionContext().frame()).toBe(frame2);
     });
 
-    it('should throw if evaluation failed', async({page, server}) => {
-      await page.evaluateOnNewDocument(function() {
-        document.querySelector = null;
-      });
-      await page.goto(server.EMPTY_PAGE);
-      let error = null;
-      await page.waitForSelector('*').catch(e => error = e);
-      expect(error.message).toContain('document.querySelector is not a function');
-    });
     it('should throw when frame is detached', async({page, server}) => {
       await utils.attachFrame(page, 'frame1', server.EMPTY_PAGE);
       const frame = page.frames()[1];
@@ -303,6 +335,10 @@ module.exports.addTests = function({testRunner, expect, product}) {
       expect(await waitForSelector).toBe(true);
       expect(divRemoved).toBe(true);
     });
+    it('should return null if waiting to hide non-existing element', async({page, server}) => {
+      const handle = await page.waitForSelector('non-existing', { hidden: true });
+      expect(handle).toBe(null);
+    });
     it('should respect timeout', async({page, server}) => {
       let error = null;
       await page.waitForSelector('div', {timeout: 10}).catch(e => error = e);
@@ -331,7 +367,7 @@ module.exports.addTests = function({testRunner, expect, product}) {
       await page.setContent(`<div class='zombo'>anything</div>`);
       expect(await page.evaluate(x => x.textContent, await waitForSelector)).toBe('anything');
     });
-    it('should have correct stack trace for timeout', async({page, server}) => {
+    (asyncawait ? it : xit)('should have correct stack trace for timeout', async({page, server}) => {
       let error;
       await page.waitForSelector('.zombo', {timeout: 10}).catch(e => error = e);
       expect(error.stack).toContain('waittask.spec.js');
@@ -363,15 +399,6 @@ module.exports.addTests = function({testRunner, expect, product}) {
       await frame2.evaluate(addElement, 'div');
       const eHandle = await waitForXPathPromise;
       expect(eHandle.executionContext().frame()).toBe(frame2);
-    });
-    it('should throw if evaluation failed', async({page, server}) => {
-      await page.evaluateOnNewDocument(function() {
-        document.evaluate = null;
-      });
-      await page.goto(server.EMPTY_PAGE);
-      let error = null;
-      await page.waitForXPath('*').catch(e => error = e);
-      expect(error.message).toContain('document.evaluate is not a function');
     });
     it('should throw when frame is detached', async({page, server}) => {
       await utils.attachFrame(page, 'frame1', server.EMPTY_PAGE);
